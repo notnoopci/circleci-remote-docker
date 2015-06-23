@@ -1,7 +1,17 @@
-test:
+dependencies:
   override:
     - docker ps -a
     - docker images
-    # Eexpecting that the docker-machine has ubuntu image
+    # Expecting that the docker-machine has ubuntu image
     - docker images | grep ubuntu
 
+    # Try building elasticsearch
+    - docker build -t circleci/elasticsearch .
+
+test:
+  override:
+    - docker run --name=elasticsearch-${CIRCLE_BUILD_NUM} -d circleci/elasticsearch; sleep 10
+    - docker run --rm --link elasticsearch-${CIRCLE_BUILD_NUM}:elasticsearch tutum/curl:trusty
+            bash -c 'curl --retry 10 --retry-delay 5 -v http://$ELASTICSEARCH_PORT_9200_TCP_ADDR:$ELASTICSEARCH_PORT_9200_TCP_PORT/'
+    - docker stop elasticsearch-${CIRCLE_BUILD_NUM}
+    - docker rm elasticsearch-${CIRCLE_BUILD_NUM}
