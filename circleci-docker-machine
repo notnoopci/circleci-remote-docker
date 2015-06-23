@@ -1,0 +1,85 @@
+#!/bin/bash
+
+usage() {
+    echo "Script to make CircleCI builds use Docker Machine instances rather"
+    echo "than built-in CircleCI docker instance"
+    echo ""
+    echo "Usage: $0 <machine-name> <org/repo-name> [<circleci-api-token>]"
+    echo "    <machine-name>: The Docker Machine name (e.g. 'dev1')"
+    echo "    <org/repo-name>: The repo name with org and repo names (e.g. 'notnoopci/circleci-docker-machine')"
+    echo "    <circleci-api-token: The write API token for CircleCI project, can be a user or a project token"
+    echo ""
+}
+
+UNTAR_CERT_COMMAND='$([[ -d /home/ubuntu/.docker-machine ]] || (mkdir -p /home/ubuntu/.docker-machine && cat ~/.circlerc | grep DOCKER_CERT_BASE64=| grep -v HACK | sed s/export.DOCKER_CERT_BASE64..//g | sed s/.$//g | base64 -d | tar -xzf - -C /home/ubuntu/.docker-machine))'
+
+DOCKER_MACHINE=$1
+CIRCLECI_PROJECT=$2
+
+set_project_env_var() {
+    VAR_NAME=$1
+    VALUE="$2"
+
+    curl --request POST \
+        -fsSL \
+        -u "${CIRCLECI_TOKEN}:" \
+        --header "Content-Type: application/json" \
+        -d "{\"name\":\"$VAR_NAME\", \"value\": \"$VALUE\" }" \
+        https://circleci.com/api/v1/project/$CIRCLECI_PROJECT/envvar > /dev/null
+
+    [ $? -eq 0 ] || (echo "Error setting envvar $VAR_NAME" && exit 2)
+}
+
+set_untar_hack() {
+    # For some reason, the complicated command cannot be passed in nicely with spaces and such
+    curl --request POST \
+        -fsSL \
+        -u "${CIRCLECI_TOKEN}:" \
+        --header "Content-Type: application/json" \
+        -d "{\"name\":\"DOCKER_CERT_HACK\", \"value\": \"$UNTAR_CERT_COMMAND\" }" \
+        https://circleci.com/api/v1/project/$CIRCLECI_PROJECT/envvar > /dev/null
+
+    [ $? -eq 0 ] || (echo "Error setting envvar $VAR_NAME" && exit 2)
+}
+
+if [[ $# -lt 2 || $# -gt 3 ]]
+then
+    echo "Incorrect number of arguments"
+    usage
+    exit 1
+fi
+
+if [ ! -z $3 ]
+then
+    CIRCLECI_TOKEN=$3
+fi
+
+if [ -z $CIRCLECI_TOKEN ]
+then
+    echo "Missing CIRCLECI_TOKEN environment variable"
+    exit 1
+fi
+
+
+
+DOCKER_MACHINE_STORAGE=${HOME}/.docker/machine/machines/$DOCKER_MACHINE
+
+
+if ! [ -e $DOCKER_MACHINE_STORAGE/cert.pem ]
+then
+    echo docker-machine not found: ${DOCKER_MACHINE}
+    exit 1
+fi
+
+
+export CERT_BASE64=$(tar -czf - -C $DOCKER_MACHINE_STORAGE ca.pem cert.pem key.pem server-key.pem server.pem | base64 )
+export HOST=$(cat $DOCKER_MACHINE_STORAGE/config.json | sed 's/.*"IPAddress":"\([0-9.]*\)".*/\1/g')
+
+set_project_env_var DOCKER_TLS_VERIFY 1
+set_project_env_var DOCKER_HOST "tcp://$HOST:2376"
+set_project_env_var DOCKER_CERT_PATH "/home/ubuntu/.docker-machine"
+set_project_env_var DOCKER_CERT_BASE64 $CERT_BASE64
+set_untar_hack
+
+
+echo "New $CIRCLECI_PROJECT builds will be using Docker daemon on $DOCKER_MACHINE ($HOST)"

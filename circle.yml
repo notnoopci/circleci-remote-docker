@@ -1,0 +1,7 @@
+test:
+  override:
+    - docker ps -a
+    - docker images
+    # Eexpecting that the docker-machine has ubuntu image
+    - docker images | grep ubuntu
+
